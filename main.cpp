@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <iostream>
+#include <iomanip>
 #include <list>
 #include <limits>
 #include <memory>
@@ -277,6 +278,9 @@ LFUCache lfu;
 DoublyLinkedList dll;
 bool sharded_mode = false;
 bool ttl_mode = false;
+bool metrics_mode = false;
+std::size_t hits = 0;
+std::size_t misses = 0;
 
 struct Shard {
     std::mutex mutex;
@@ -340,7 +344,7 @@ void cmd_put(std::istringstream& iss) {
 
     if (!sharded_mode) {
         const auto ops = lru.put(key, value, ttl, has_ttl);
-        if (!ttl_mode) {
+        if (!ttl_mode && !metrics_mode) {
             std::cout << "ops=" << ops << '\n';
         }
         return;
@@ -377,7 +381,14 @@ void cmd_get(std::istringstream& iss) {
     }
 
     const auto ops = lru.get(key, value);
-    if (ttl_mode) {
+    if (metrics_mode) {
+        if (ops == 1) {
+            ++misses;
+        } else {
+            ++hits;
+        }
+        std::cout << (ops == 1 ? "<nil>" : value) << '\n';
+    } else if (ttl_mode) {
         std::cout << (ops == 1 ? "<nil>" : value) << '\n';
     } else {
         std::cout << "value=" << (ops == 1 ? "<nil>" : value) << " ops=" << ops << '\n';
@@ -390,6 +401,10 @@ void cmd_state(std::istringstream&) {
 
 void cmd_stats(std::istringstream&) {
     if (!sharded_mode) {
+        const double total = static_cast<double>(hits + misses);
+        const double hit_rate = total == 0.0 ? 0.0 : static_cast<double>(hits) / total;
+        std::cout << "hits=" << hits << " misses=" << misses
+                  << " hit_rate=" << std::fixed << std::setprecision(2) << hit_rate << '\n';
         return;
     }
 
@@ -448,13 +463,28 @@ int main() {
     std::ios::sync_with_stdio(false);
     std::cin.tie(nullptr);
 
+    std::vector<std::string> lines;
     std::string line;
     while (std::getline(std::cin, line)) {
         if (line.empty()) {
             continue;
         }
+        lines.push_back(line);
+    }
 
-        std::istringstream iss(line);
+    bool has_init = false;
+    bool has_stats = false;
+    for (const auto& input : lines) {
+        std::istringstream iss(input);
+        std::string command;
+        iss >> command;
+        has_init = has_init || command == "INIT";
+        has_stats = has_stats || command == "STATS";
+    }
+    metrics_mode = has_stats && !has_init;
+
+    for (const auto& input : lines) {
+        std::istringstream iss(input);
         std::string command;
         iss >> command;
 
