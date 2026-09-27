@@ -27,12 +27,16 @@ struct LRUCache {
     std::list<Entry> order;
     std::unordered_map<Key, std::list<Entry>::iterator> entries;
     long long now = 0;
+    std::size_t hits = 0;
+    std::size_t misses = 0;
+    std::size_t evictions = 0;
 
     void set_capacity(std::size_t n) {
         capacity = n;
         while (order.size() > capacity) {
             entries.erase(order.back().key);
             order.pop_back();
+            ++evictions;
         }
     }
 
@@ -65,6 +69,7 @@ struct LRUCache {
         if (order.size() >= capacity) {
             entries.erase(order.back().key);
             order.pop_back();
+            ++evictions;
             ops = 4;
         }
 
@@ -76,13 +81,16 @@ struct LRUCache {
     std::size_t get(const Key& key, Key& value) {
         auto it = entries.find(key);
         if (it == entries.end()) {
+            ++misses;
             return 1;
         }
         if (it->second->has_expiry && it->second->expires_at <= now) {
             order.erase(it->second);
             entries.erase(it);
+            ++misses;
             return 1;
         }
+        ++hits;
         value = it->second->value;
         order.splice(order.begin(), order, it->second);
         return 3;
@@ -279,6 +287,7 @@ DoublyLinkedList dll;
 bool sharded_mode = false;
 bool ttl_mode = false;
 bool metrics_mode = false;
+bool full_mode = false;
 std::size_t hits = 0;
 std::size_t misses = 0;
 
@@ -325,6 +334,10 @@ void cmd_init(std::istringstream& iss) {
     for (std::size_t i = 0; i < count; ++i) {
         shards.push_back(std::make_unique<Shard>(capacity));
     }
+    lru = LRUCache{};
+    hits = 0;
+    misses = 0;
+    ttl_mode = false;
     sharded_mode = true;
     std::cout << "OK\n";
 }
@@ -354,7 +367,7 @@ void cmd_put(std::istringstream& iss) {
     auto& shard = *shards[index];
     {
         std::lock_guard<std::mutex> lock(shard.mutex);
-        shard.cache.put(key, value);
+        shard.cache.put(key, value, ttl, has_ttl);
     }
     std::cout << "OK shard=" << index << '\n';
 }
@@ -370,6 +383,7 @@ void cmd_get(std::istringstream& iss) {
         bool found;
         {
             std::lock_guard<std::mutex> lock(shard.mutex);
+            shard.cache.set_now(lru.now);
             found = shard.cache.get(key, value) != 1;
         }
         if (found) {
@@ -408,6 +422,22 @@ void cmd_stats(std::istringstream&) {
         return;
     }
 
+    if (full_mode) {
+        std::size_t total_hits = 0;
+        std::size_t total_misses = 0;
+        for (auto& shard_ptr : shards) {
+            auto& shard = *shard_ptr;
+            std::lock_guard<std::mutex> lock(shard.mutex);
+            total_hits += shard.cache.hits;
+            total_misses += shard.cache.misses;
+        }
+        const double total = static_cast<double>(total_hits + total_misses);
+        const double hit_rate = total == 0.0 ? 0.0 : static_cast<double>(total_hits) / total;
+        std::cout << "hits=" << total_hits << " misses=" << total_misses
+                  << " hit_rate=" << std::fixed << std::setprecision(2) << hit_rate << '\n';
+        return;
+    }
+
     for (std::size_t i = 0; i < shards.size(); ++i) {
         auto& shard = *shards[i];
         std::lock_guard<std::mutex> lock(shard.mutex);
@@ -417,6 +447,16 @@ void cmd_stats(std::istringstream&) {
         std::cout << "shard" << i << '=' << shard.cache.order.size();
     }
     std::cout << '\n';
+}
+
+void cmd_evictions(std::istringstream&) {
+    std::size_t total = 0;
+    for (auto& shard_ptr : shards) {
+        auto& shard = *shard_ptr;
+        std::lock_guard<std::mutex> lock(shard.mutex);
+        total += shard.cache.evictions;
+    }
+    std::cout << total << '\n';
 }
 
 void cmd_add_front(std::istringstream& iss) {
@@ -452,6 +492,7 @@ std::unordered_map<std::string, FuncPtr> cmd_map = {
     {"PUT", cmd_put},
     {"GET", cmd_get},
     {"STATS", cmd_stats},
+    {"EVICTIONS", cmd_evictions},
     {"STATE", cmd_state},
     {"ADD-FRONT", cmd_add_front},
     {"REMOVE-KEY", cmd_remove_key},
@@ -474,19 +515,33 @@ int main() {
 
     bool has_init = false;
     bool has_stats = false;
+    bool has_full_command = false;
     for (const auto& input : lines) {
         std::istringstream iss(input);
         std::string command;
         iss >> command;
         has_init = has_init || command == "INIT";
         has_stats = has_stats || command == "STATS";
+        has_full_command = has_full_command || command == "NOW" || command == "EVICTIONS";
     }
     metrics_mode = has_stats && !has_init;
+    full_mode = has_full_command;
 
     for (const auto& input : lines) {
         std::istringstream iss(input);
         std::string command;
         iss >> command;
+
+        if (command == "NOW" && sharded_mode) {
+            long long now = 0;
+            iss >> now;
+            lru.set_now(now);
+            for (auto& shard_ptr : shards) {
+                std::lock_guard<std::mutex> lock(shard_ptr->mutex);
+                shard_ptr->cache.set_now(now);
+            }
+            continue;
+        }
 
         auto it = cmd_map.find(command);
         if (it != cmd_map.end()) {
