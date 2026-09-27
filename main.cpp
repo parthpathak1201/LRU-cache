@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <iostream>
 #include <list>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -11,35 +12,61 @@ using FuncPtr = void (*)(std::istringstream&);
 
 struct LRUCache {
     std::size_t capacity = 0;
-    std::size_t hits = 0;
 
-    std::list<Key> order;
-    std::unordered_map<Key, std::list<Key>::iterator> pos;
+    struct Entry {
+        Key key;
+        Key value;
+    };
+
+    std::list<Entry> order;
 
     void set_capacity(std::size_t n) {
         capacity = n;
         while (order.size() > capacity) {
-            pos.erase(order.back());
             order.pop_back();
         }
     }
 
-    void access(const Key& key) {
-        auto it = pos.find(key);
-
-        if (it != pos.end()) {
-            ++hits;
-            order.splice(order.begin(), order, it->second);
-            return;
+    void put(const Key& key, const Key& value) {
+        for (auto it = order.begin(); it != order.end(); ++it) {
+            if (it->key == key) {
+                it->value = value;
+                order.splice(order.begin(), order, it);
+                return;
+            }
         }
 
-        if (capacity != 0 && order.size() >= capacity) {
-            pos.erase(order.back());
+        if (capacity == 0) {
+            return;
+        }
+        if (order.size() >= capacity) {
             order.pop_back();
         }
 
-        order.push_front(key);
-        pos[key] = order.begin();
+        order.push_front({key, value});
+    }
+
+    bool get(const Key& key, Key& value) {
+        for (auto it = order.begin(); it != order.end(); ++it) {
+            if (it->key == key) {
+                value = it->value;
+                order.splice(order.begin(), order, it);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void print_state() const {
+        bool first = true;
+        for (const auto& entry : order) {
+            if (!first) {
+                std::cout << ' ';
+            }
+            std::cout << entry.key << '=' << entry.value;
+            first = false;
+        }
+        std::cout << '\n';
     }
 };
 
@@ -127,31 +154,34 @@ LFUCache lfu;
 void cmd_cap(std::istringstream& iss) {
     std::size_t capacity = 0;
     iss >> capacity;
-
     lru.set_capacity(capacity);
-    fifo.set_capacity(capacity);
-    lfu.set_capacity(capacity);
+    std::cout << "OK\n";
 }
 
-void cmd_access(std::istringstream& iss) {
+void cmd_put(std::istringstream& iss) {
     Key key;
-    iss >> key;
-
-    lru.access(key);
-    fifo.access(key);
-    lfu.access(key);
+    Key value;
+    iss >> key >> value;
+    lru.put(key, value);
+    std::cout << "OK\n";
 }
 
-void cmd_stats(std::istringstream&) {
-    std::cout << "lru_hits=" << lru.hits
-              << " fifo_hits=" << fifo.hits
-              << " lfu_hits=" << lfu.hits << '\n';
+void cmd_get(std::istringstream& iss) {
+    Key key;
+    Key value;
+    iss >> key;
+    std::cout << (lru.get(key, value) ? value : "<nil>") << '\n';
+}
+
+void cmd_state(std::istringstream&) {
+    lru.print_state();
 }
 
 std::unordered_map<std::string, FuncPtr> cmd_map = {
     {"CAP", cmd_cap},
-    {"ACCESS", cmd_access},
-    {"STATS", cmd_stats}
+    {"PUT", cmd_put},
+    {"GET", cmd_get},
+    {"STATE", cmd_state}
 };
 
 int main() {
