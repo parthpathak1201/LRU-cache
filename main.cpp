@@ -5,6 +5,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -19,10 +20,12 @@ struct LRUCache {
     struct Entry {
         Key key;
         Key value;
+        std::optional<long long> expires_at;
     };
 
     std::list<Entry> order;
     std::unordered_map<Key, std::list<Entry>::iterator> entries;
+    long long now = 0;
 
     void set_capacity(std::size_t n) {
         capacity = n;
@@ -32,10 +35,22 @@ struct LRUCache {
         }
     }
 
-    std::size_t put(const Key& key, const Key& value) {
+    void set_now(long long time) {
+        now = time;
+    }
+
+    std::size_t put(const Key& key, const Key& value, std::optional<long long> ttl = std::nullopt) {
         auto it = entries.find(key);
         if (it != entries.end()) {
+            if (it->second->expires_at && *it->second->expires_at <= now) {
+                order.erase(it->second);
+                entries.erase(it);
+                it = entries.end();
+            }
+        }
+        if (it != entries.end()) {
             it->second->value = value;
+            it->second->expires_at = ttl ? std::optional<long long>(now + *ttl) : std::nullopt;
             order.splice(order.begin(), order, it->second);
             return 3;
         }
@@ -51,7 +66,7 @@ struct LRUCache {
             ops = 4;
         }
 
-        order.push_front({key, value});
+        order.push_front({key, value, ttl ? std::optional<long long>(now + *ttl) : std::nullopt});
         entries.emplace(key, order.begin());
         return ops;
     }
@@ -61,12 +76,18 @@ struct LRUCache {
         if (it == entries.end()) {
             return 1;
         }
+        if (it->second->expires_at && *it->second->expires_at <= now) {
+            order.erase(it->second);
+            entries.erase(it);
+            return 1;
+        }
         value = it->second->value;
         order.splice(order.begin(), order, it->second);
         return 3;
     }
 
-    void print_state() const {
+    void print_state() {
+        remove_expired();
         bool first = true;
         for (const auto& entry : order) {
             if (!first) {
@@ -76,6 +97,18 @@ struct LRUCache {
             first = false;
         }
         std::cout << '\n';
+    }
+
+private:
+    void remove_expired() {
+        for (auto it = order.begin(); it != order.end();) {
+            if (it->expires_at && *it->expires_at <= now) {
+                entries.erase(it->key);
+                it = order.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
 };
 
@@ -242,6 +275,7 @@ FIFOCache fifo;
 LFUCache lfu;
 DoublyLinkedList dll;
 bool sharded_mode = false;
+bool ttl_mode = false;
 
 struct Shard {
     std::mutex mutex;
@@ -269,6 +303,13 @@ void cmd_cap(std::istringstream& iss) {
     lru.set_capacity(capacity);
 }
 
+void cmd_now(std::istringstream& iss) {
+    long long now = 0;
+    iss >> now;
+    ttl_mode = true;
+    lru.set_now(now);
+}
+
 void cmd_init(std::istringstream& iss) {
     std::size_t count = 0;
     std::size_t capacity = 0;
@@ -287,9 +328,18 @@ void cmd_put(std::istringstream& iss) {
     Key key;
     Key value;
     iss >> key >> value;
+    std::optional<long long> ttl;
+    long long ttl_value = 0;
+    if (iss >> ttl_value) {
+        ttl = ttl_value;
+        ttl_mode = true;
+    }
 
     if (!sharded_mode) {
-        std::cout << "ops=" << lru.put(key, value) << '\n';
+        const auto ops = lru.put(key, value, ttl);
+        if (!ttl_mode) {
+            std::cout << "ops=" << ops << '\n';
+        }
         return;
     }
 
@@ -324,7 +374,11 @@ void cmd_get(std::istringstream& iss) {
     }
 
     const auto ops = lru.get(key, value);
-    std::cout << "value=" << (ops == 1 ? "<nil>" : value) << " ops=" << ops << '\n';
+    if (ttl_mode) {
+        std::cout << (ops == 1 ? "<nil>" : value) << '\n';
+    } else {
+        std::cout << "value=" << (ops == 1 ? "<nil>" : value) << " ops=" << ops << '\n';
+    }
 }
 
 void cmd_state(std::istringstream&) {
@@ -375,6 +429,7 @@ void cmd_list(std::istringstream&) {
 
 std::unordered_map<std::string, FuncPtr> cmd_map = {
     {"CAP", cmd_cap},
+    {"NOW", cmd_now},
     {"INIT", cmd_init},
     {"PUT", cmd_put},
     {"GET", cmd_get},
