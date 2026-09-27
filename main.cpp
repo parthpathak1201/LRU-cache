@@ -3,9 +3,12 @@
 #include <iostream>
 #include <list>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 using Key = std::string;
 using FuncPtr = void (*)(std::istringstream&);
@@ -238,30 +241,110 @@ LRUCache lru;
 FIFOCache fifo;
 LFUCache lfu;
 DoublyLinkedList dll;
+bool sharded_mode = false;
+
+struct Shard {
+    std::mutex mutex;
+    LRUCache cache;
+
+    explicit Shard(std::size_t capacity) {
+        cache.set_capacity(capacity);
+    }
+};
+
+std::vector<std::unique_ptr<Shard>> shards;
+
+std::size_t shard_for(const Key& key) {
+    std::size_t hash = 0;
+    for (const unsigned char ch : key) {
+        hash += ch;
+    }
+    return hash % shards.size();
+}
 
 void cmd_cap(std::istringstream& iss) {
     std::size_t capacity = 0;
     iss >> capacity;
+    sharded_mode = false;
     lru.set_capacity(capacity);
+}
+
+void cmd_init(std::istringstream& iss) {
+    std::size_t count = 0;
+    std::size_t capacity = 0;
+    iss >> count >> capacity;
+
+    shards.clear();
+    shards.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        shards.push_back(std::make_unique<Shard>(capacity));
+    }
+    sharded_mode = true;
+    std::cout << "OK\n";
 }
 
 void cmd_put(std::istringstream& iss) {
     Key key;
     Key value;
     iss >> key >> value;
-    std::cout << "ops=" << lru.put(key, value) << '\n';
+
+    if (!sharded_mode) {
+        std::cout << "ops=" << lru.put(key, value) << '\n';
+        return;
+    }
+
+    const auto index = shard_for(key);
+    auto& shard = *shards[index];
+    {
+        std::lock_guard lock(shard.mutex);
+        shard.cache.put(key, value);
+    }
+    std::cout << "OK shard=" << index << '\n';
 }
 
 void cmd_get(std::istringstream& iss) {
     Key key;
     Key value;
     iss >> key;
+
+    if (sharded_mode) {
+        const auto index = shard_for(key);
+        auto& shard = *shards[index];
+        bool found;
+        {
+            std::lock_guard lock(shard.mutex);
+            found = shard.cache.get(key, value) != 1;
+        }
+        if (found) {
+            std::cout << value << " shard=" << index << '\n';
+        } else {
+            std::cout << "<nil>\n";
+        }
+        return;
+    }
+
     const auto ops = lru.get(key, value);
     std::cout << "value=" << (ops == 1 ? "<nil>" : value) << " ops=" << ops << '\n';
 }
 
 void cmd_state(std::istringstream&) {
     lru.print_state();
+}
+
+void cmd_stats(std::istringstream&) {
+    if (!sharded_mode) {
+        return;
+    }
+
+    for (std::size_t i = 0; i < shards.size(); ++i) {
+        auto& shard = *shards[i];
+        std::lock_guard lock(shard.mutex);
+        if (i != 0) {
+            std::cout << ' ';
+        }
+        std::cout << "shard" << i << '=' << shard.cache.order.size();
+    }
+    std::cout << '\n';
 }
 
 void cmd_add_front(std::istringstream& iss) {
@@ -292,8 +375,10 @@ void cmd_list(std::istringstream&) {
 
 std::unordered_map<std::string, FuncPtr> cmd_map = {
     {"CAP", cmd_cap},
+    {"INIT", cmd_init},
     {"PUT", cmd_put},
     {"GET", cmd_get},
+    {"STATS", cmd_stats},
     {"STATE", cmd_state},
     {"ADD-FRONT", cmd_add_front},
     {"REMOVE-KEY", cmd_remove_key},
