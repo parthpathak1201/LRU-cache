@@ -19,42 +19,48 @@ struct LRUCache {
     };
 
     std::list<Entry> order;
+    std::unordered_map<Key, std::list<Entry>::iterator> entries;
 
     void set_capacity(std::size_t n) {
         capacity = n;
         while (order.size() > capacity) {
+            entries.erase(order.back().key);
             order.pop_back();
         }
     }
 
-    void put(const Key& key, const Key& value) {
-        for (auto it = order.begin(); it != order.end(); ++it) {
-            if (it->key == key) {
-                it->value = value;
-                order.splice(order.begin(), order, it);
-                return;
-            }
+    std::size_t put(const Key& key, const Key& value) {
+        auto it = entries.find(key);
+        if (it != entries.end()) {
+            it->second->value = value;
+            order.splice(order.begin(), order, it->second);
+            return 3;
         }
 
         if (capacity == 0) {
-            return;
+            return 1;
         }
+
+        std::size_t ops = 2;
         if (order.size() >= capacity) {
+            entries.erase(order.back().key);
             order.pop_back();
+            ops = 4;
         }
 
         order.push_front({key, value});
+        entries.emplace(key, order.begin());
+        return ops;
     }
 
-    bool get(const Key& key, Key& value) {
-        for (auto it = order.begin(); it != order.end(); ++it) {
-            if (it->key == key) {
-                value = it->value;
-                order.splice(order.begin(), order, it);
-                return true;
-            }
+    std::size_t get(const Key& key, Key& value) {
+        auto it = entries.find(key);
+        if (it == entries.end()) {
+            return 1;
         }
-        return false;
+        value = it->second->value;
+        order.splice(order.begin(), order, it->second);
+        return 3;
     }
 
     void print_state() const {
@@ -237,22 +243,21 @@ void cmd_cap(std::istringstream& iss) {
     std::size_t capacity = 0;
     iss >> capacity;
     lru.set_capacity(capacity);
-    std::cout << "OK\n";
 }
 
 void cmd_put(std::istringstream& iss) {
     Key key;
     Key value;
     iss >> key >> value;
-    lru.put(key, value);
-    std::cout << "OK\n";
+    std::cout << "ops=" << lru.put(key, value) << '\n';
 }
 
 void cmd_get(std::istringstream& iss) {
     Key key;
     Key value;
     iss >> key;
-    std::cout << (lru.get(key, value) ? value : "<nil>") << '\n';
+    const auto ops = lru.get(key, value);
+    std::cout << "value=" << (ops == 1 ? "<nil>" : value) << " ops=" << ops << '\n';
 }
 
 void cmd_state(std::istringstream&) {
