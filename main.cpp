@@ -5,7 +5,6 @@
 #include <limits>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -20,7 +19,8 @@ struct LRUCache {
     struct Entry {
         Key key;
         Key value;
-        std::optional<long long> expires_at;
+        long long expires_at = 0;
+        bool has_expiry = false;
     };
 
     std::list<Entry> order;
@@ -39,10 +39,10 @@ struct LRUCache {
         now = time;
     }
 
-    std::size_t put(const Key& key, const Key& value, std::optional<long long> ttl = std::nullopt) {
+    std::size_t put(const Key& key, const Key& value, long long ttl = 0, bool has_ttl = false) {
         auto it = entries.find(key);
         if (it != entries.end()) {
-            if (it->second->expires_at && *it->second->expires_at <= now) {
+            if (it->second->has_expiry && it->second->expires_at <= now) {
                 order.erase(it->second);
                 entries.erase(it);
                 it = entries.end();
@@ -50,7 +50,8 @@ struct LRUCache {
         }
         if (it != entries.end()) {
             it->second->value = value;
-            it->second->expires_at = ttl ? std::optional<long long>(now + *ttl) : std::nullopt;
+            it->second->has_expiry = has_ttl;
+            it->second->expires_at = now + ttl;
             order.splice(order.begin(), order, it->second);
             return 3;
         }
@@ -66,7 +67,7 @@ struct LRUCache {
             ops = 4;
         }
 
-        order.push_front({key, value, ttl ? std::optional<long long>(now + *ttl) : std::nullopt});
+        order.push_front({key, value, now + ttl, has_ttl});
         entries.emplace(key, order.begin());
         return ops;
     }
@@ -76,7 +77,7 @@ struct LRUCache {
         if (it == entries.end()) {
             return 1;
         }
-        if (it->second->expires_at && *it->second->expires_at <= now) {
+        if (it->second->has_expiry && it->second->expires_at <= now) {
             order.erase(it->second);
             entries.erase(it);
             return 1;
@@ -102,7 +103,7 @@ struct LRUCache {
 private:
     void remove_expired() {
         for (auto it = order.begin(); it != order.end();) {
-            if (it->expires_at && *it->expires_at <= now) {
+            if (it->has_expiry && it->expires_at <= now) {
                 entries.erase(it->key);
                 it = order.erase(it);
             } else {
@@ -328,15 +329,17 @@ void cmd_put(std::istringstream& iss) {
     Key key;
     Key value;
     iss >> key >> value;
-    std::optional<long long> ttl;
+    long long ttl = 0;
+    bool has_ttl = false;
     long long ttl_value = 0;
     if (iss >> ttl_value) {
         ttl = ttl_value;
+        has_ttl = true;
         ttl_mode = true;
     }
 
     if (!sharded_mode) {
-        const auto ops = lru.put(key, value, ttl);
+        const auto ops = lru.put(key, value, ttl, has_ttl);
         if (!ttl_mode) {
             std::cout << "ops=" << ops << '\n';
         }
