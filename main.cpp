@@ -296,7 +296,7 @@ void cmd_put(std::istringstream& iss) {
     const auto index = shard_for(key);
     auto& shard = *shards[index];
     {
-        std::lock_guard lock(shard.mutex);
+        std::lock_guard<std::mutex> lock(shard.mutex);
         shard.cache.put(key, value);
     }
     std::cout << "OK shard=" << index << '\n';
@@ -312,7 +312,7 @@ void cmd_get(std::istringstream& iss) {
         auto& shard = *shards[index];
         bool found;
         {
-            std::lock_guard lock(shard.mutex);
+            std::lock_guard<std::mutex> lock(shard.mutex);
             found = shard.cache.get(key, value) != 1;
         }
         if (found) {
@@ -338,7 +338,7 @@ void cmd_stats(std::istringstream&) {
 
     for (std::size_t i = 0; i < shards.size(); ++i) {
         auto& shard = *shards[i];
-        std::lock_guard lock(shard.mutex);
+        std::lock_guard<std::mutex> lock(shard.mutex);
         if (i != 0) {
             std::cout << ' ';
         }
