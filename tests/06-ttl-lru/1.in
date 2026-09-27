@@ -1,0 +1,9 @@
+NOW 0
+CAP 3
+PUT a 1 100
+PUT b 2
+PUT c 3 50
+NOW 60
+GET c
+GET a
+STATE

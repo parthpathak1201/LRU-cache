@@ -1,0 +1,10 @@
+INIT 3 10
+PUT apple 1
+PUT banana 2
+PUT cherry 3
+GET apple
+GET banana
+GET cherry
+GET durian
+STATS
+EVICTIONS

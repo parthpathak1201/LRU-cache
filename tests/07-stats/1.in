@@ -1,0 +1,6 @@
+CAP 2
+PUT a 1
+GET a
+GET b
+GET a
+STATS

@@ -1,0 +1,6 @@
+INIT 4 2
+PUT a 1
+PUT b 2
+PUT e 5
+GET a
+STATS

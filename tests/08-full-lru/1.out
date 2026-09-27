@@ -1,0 +1,9 @@
+OK
+OK shard=1
+OK shard=0
+1 shard=1
+OK shard=1
+<nil>
+2 shard=0
+hits=2 misses=1 hit_rate=0.67
+1

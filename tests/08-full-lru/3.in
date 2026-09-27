@@ -1,0 +1,10 @@
+INIT 1 2
+PUT x 1
+PUT y 2
+GET x
+PUT z 3
+GET y
+GET x
+GET z
+STATS
+EVICTIONS
